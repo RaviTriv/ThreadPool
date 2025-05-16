@@ -4,6 +4,8 @@
 #include <iostream>
 #include <functional>
 #include <vector>
+#include <future>
+#include <type_traits>
 
 class ThreadGuard
 {
@@ -25,17 +27,53 @@ public:
   };
 };
 
+class FunctionWrapper
+{
+  struct implBase
+  {
+    virtual void call() = 0;
+    virtual ~implBase() {}
+  };
+  std::unique_ptr<implBase> impl;
+  template <typename F>
+  struct implType : implBase
+  {
+    F f;
+    implType(F &&f_) : f(std::move(f_)) {}
+    void call() { f(); }
+  };
+
+public:
+  template <typename F>
+  FunctionWrapper(F &&f) : impl(new implType<F>(std::move(f)))
+  {
+  }
+  void operator()() { impl->call(); }
+  FunctionWrapper() = default;
+  FunctionWrapper(FunctionWrapper &&other) : impl(std::move(other.impl))
+  {
+  }
+  FunctionWrapper &operator=(FunctionWrapper &&other)
+  {
+    impl = std::move(other.impl);
+    return *this;
+  }
+  FunctionWrapper(const FunctionWrapper &) = delete;
+  FunctionWrapper(FunctionWrapper &) = delete;
+  FunctionWrapper &operator=(const FunctionWrapper &) = delete;
+};
+
 class ThreadPool
 {
   std::atomic_bool done;
-  ThreadSafeQueue<std::function<void()>> queue;
+  ThreadSafeQueue<FunctionWrapper> queue;
   std::vector<std::thread> threads;
   ThreadGuard guard;
   void workerThread()
   {
     while (!done)
     {
-      std::function<void()> task;
+      FunctionWrapper task;
       if (queue.tryPop(task))
       {
         task();
@@ -70,8 +108,14 @@ public:
     done = true;
   }
   template <typename FunctionType>
-  void submit(FunctionType f)
+  std::future<typename std::invoke_result<FunctionType>::type>
+  submit(FunctionType f)
   {
-    queue.push(std::function<void()>(f));
+    typedef typename std::invoke_result<FunctionType>::type
+        result_type;
+    std::packaged_task<result_type()> task(std::move(f));
+    std::future<result_type> res(task.get_future());
+    queue.push(std::move(task));
+    return res;
   }
 };
