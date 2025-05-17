@@ -1,3 +1,4 @@
+#pragma once
 #include "./queue/queue.h"
 #include <thread>
 #include <mutex>
@@ -6,6 +7,7 @@
 #include <vector>
 #include <future>
 #include <type_traits>
+#include <queue>
 
 class ThreadGuard
 {
@@ -15,16 +17,7 @@ public:
   explicit ThreadGuard(std::vector<std::thread> &threads_) : threads(threads_)
   {
   }
-  ~ThreadGuard()
-  {
-    for (size_t i = 0; i < threads.size(); i++)
-    {
-      if (threads[i].joinable())
-      {
-        threads[i].join();
-      }
-    }
-  };
+  ~ThreadGuard();
 };
 
 class FunctionWrapper
@@ -67,46 +60,17 @@ class ThreadPool
 {
   std::atomic_bool done;
   ThreadSafeQueue<FunctionWrapper> queue;
-  std::vector<std::thread> threads;
+  typedef std::queue<FunctionWrapper> localQueue;
+  static thread_local std::unique_ptr<localQueue>
+      localWorkQueue;
+  std::vector<std::thread>
+      threads;
   ThreadGuard guard;
-  void workerThread()
-  {
-    while (!done)
-    {
-      FunctionWrapper task;
-      if (queue.tryPop(task))
-      {
-        task();
-      }
-      else
-      {
-        std::this_thread::yield();
-      }
-    }
-  };
+  void workerThread();
 
 public:
-  ThreadPool() : done(false), guard(threads)
-  {
-    unsigned const thread_count = std::thread::hardware_concurrency();
-    try
-    {
-      for (unsigned i = 0; i < thread_count; ++i)
-      {
-        threads.push_back(
-            std::thread(&ThreadPool::workerThread, this));
-      }
-    }
-    catch (...)
-    {
-      done = true;
-      throw;
-    }
-  }
-  ~ThreadPool()
-  {
-    done = true;
-  }
+  ThreadPool();
+  ~ThreadPool();
   template <typename FunctionType>
   std::future<typename std::invoke_result<FunctionType>::type>
   submit(FunctionType f)
@@ -115,7 +79,15 @@ public:
         result_type;
     std::packaged_task<result_type()> task(std::move(f));
     std::future<result_type> res(task.get_future());
-    queue.push(std::move(task));
+    if (localWorkQueue)
+    {
+      localWorkQueue->push(std::move(task));
+    }
+    else
+    {
+      queue.push(std::move(task));
+    }
     return res;
   }
+  void runPendingTask();
 };

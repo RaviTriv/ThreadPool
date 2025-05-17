@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 
 add_executable(ThreadPool
     src/main.cpp
+    src/threadPool/threadPool.cpp
 )
 
 target_include_directories(ThreadPool PRIVATE src)
