@@ -56,6 +56,23 @@ public:
   FunctionWrapper &operator=(const FunctionWrapper &) = delete;
 };
 
+class ThreadSafeDequeue
+{
+private:
+  mutable std::mutex mtx;
+  typedef FunctionWrapper dataType;
+  std::deque<dataType> dataQueue;
+
+public:
+  ThreadSafeDequeue() {};
+  ThreadSafeDequeue(const ThreadSafeDequeue &other) = delete;
+  ThreadSafeDequeue &operator=(const ThreadSafeDequeue &other) = delete;
+  void push(dataType data);
+  bool empty() const;
+  bool tryPop(dataType &value);
+  bool trySteal(dataType &value);
+};
+
 class ThreadPool
 {
   std::atomic_bool done;
