@@ -2,7 +2,6 @@
 #include "./queue/queue.h"
 #include <thread>
 #include <mutex>
-#include <iostream>
 #include <functional>
 #include <vector>
 #include <future>
@@ -77,15 +76,16 @@ class ThreadPool
 {
   std::atomic_bool done;
   ThreadSafeQueue<FunctionWrapper> queue;
-  typedef std::queue<FunctionWrapper> localQueue;
-  static thread_local std::unique_ptr<localQueue>
-      localWorkQueue;
+  std::vector<std::unique_ptr<ThreadSafeDequeue>> queues;
+  static thread_local ThreadSafeDequeue *localWorkQueue;
+  static thread_local unsigned idx;
   std::vector<std::thread>
       threads;
   ThreadGuard guard;
-  void workerThread();
+  void workerThread(unsigned index);
 
 public:
+  typedef FunctionWrapper taskType;
   ThreadPool();
   ~ThreadPool();
   template <typename FunctionType>
@@ -107,4 +107,7 @@ public:
     return res;
   }
   void runPendingTask();
+  bool otherThreadQueuePopTask(taskType &task);
+  bool poolQueuePopTask(taskType &task);
+  bool localQueuePopTask(taskType &task);
 };

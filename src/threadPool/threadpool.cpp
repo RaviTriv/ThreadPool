@@ -1,6 +1,7 @@
 #include "./threadPool.h"
 
-std::unique_ptr<ThreadPool::localQueue> thread_local ThreadPool::localWorkQueue{};
+thread_local ThreadSafeDequeue *ThreadPool::localWorkQueue;
+thread_local unsigned ThreadPool::idx;
 
 ThreadGuard::~ThreadGuard()
 {
@@ -32,7 +33,7 @@ bool ThreadSafeDequeue::tryPop(dataType &value)
   {
     return false;
   }
-  value = std::move(dataQueue.back());
+  value = std::move(dataQueue.front());
   dataQueue.pop_front();
   return true;
 }
@@ -49,32 +50,52 @@ bool ThreadSafeDequeue::trySteal(dataType &value)
   return true;
 }
 
-void ThreadPool::workerThread()
+void ThreadPool::workerThread(unsigned index)
 {
-  localWorkQueue.reset(new localQueue);
+  idx = index;
+  localWorkQueue = queues[idx].get();
   while (!done)
   {
-    FunctionWrapper task;
-    if (queue.tryPop(task))
-    {
-      task();
-    }
-    else
-    {
-      std::this_thread::yield();
-    }
+    ThreadPool::runPendingTask();
   }
 };
 
+bool ThreadPool::localQueuePopTask(taskType &task)
+{
+  return localWorkQueue && localWorkQueue->tryPop(task);
+}
+
+bool ThreadPool::poolQueuePopTask(taskType &task)
+{
+  return queue.tryPop(task);
+}
+
+bool ThreadPool::otherThreadQueuePopTask(taskType &task)
+{
+  for (unsigned i = 0; i < queues.size(); ++i)
+  {
+    unsigned const index = (idx + i + 1) % queues.size();
+    if (queues[index]->trySteal(task))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 ThreadPool::ThreadPool() : done(false), guard(threads)
 {
-  unsigned const thread_count = std::thread::hardware_concurrency();
+  unsigned const threadCount = std::thread::hardware_concurrency();
   try
   {
-    for (unsigned i = 0; i < thread_count; ++i)
+    for (unsigned i = 0; i < threadCount; ++i)
     {
-      threads.push_back(
-          std::thread(&ThreadPool::workerThread, this));
+      queues.push_back(std::unique_ptr<ThreadSafeDequeue>(
+          new ThreadSafeDequeue));
+    }
+    for (unsigned i = 0; i < threadCount; ++i)
+    {
+      threads.push_back(std::thread(&ThreadPool::workerThread, this, i));
     }
   }
   catch (...)
@@ -91,14 +112,11 @@ ThreadPool::~ThreadPool()
 
 void ThreadPool::runPendingTask()
 {
-  FunctionWrapper task;
-  if (localWorkQueue && !localWorkQueue->empty())
-  {
-    task = std::move(localWorkQueue->front());
-    localWorkQueue->pop();
-    task();
-  }
-  else if (queue.tryPop(task))
+  taskType task;
+  if (
+      localQueuePopTask(task) ||
+      poolQueuePopTask(task) ||
+      otherThreadQueuePopTask(task))
   {
     task();
   }
